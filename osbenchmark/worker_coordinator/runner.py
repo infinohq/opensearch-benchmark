@@ -805,6 +805,11 @@ def parse(text: BytesIO, props: List[str], lists: List[str] = None) -> dict:
     :param lists: An optional list of property paths to JSON lists in the provided text.
     :return: A dict containing all properties and lists that have been found in the provided text.
     """
+
+    # Infino sends reponse that is 'bytes'. Convert it to BytesIO.
+    if isinstance(text, bytes):
+        text = BytesIO(text)
+
     text.seek(0)
     parser = ijson.parse(text)
     parsed = {}

@@ -635,7 +635,10 @@ class WorkerCoordinator:
 
         # Avoid issuing any requests to the target cluster when static responses are enabled. The results
         # are not useful and attempts to connect to a non-existing cluster just lead to exception traces in logs.
-        self.prepare_telemetry(os_clients, enable=not uses_static_responses)
+        #self.prepare_telemetry(os_clients, enable=not uses_static_responses)
+
+        # Do not enable telemetry for Infino.
+        self.prepare_telemetry(os_clients, enable=False)
 
         for host in self.config.opts("worker_coordinator", "load_worker_coordinator_hosts"):
             host_config = {

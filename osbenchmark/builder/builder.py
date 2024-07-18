@@ -260,6 +260,10 @@ def cluster_distribution_version(cfg, client_factory=client.OsClientFactory):
     :param client_factory: Factory class that creates the OpenSearch client.
     :return: The distribution version.
     """
+
+    # Always return a fixed version for Infino.
+    return "2.13.0"
+
     hosts = cfg.opts("client", "hosts").default
     client_options = cfg.opts("client", "options").default
     opensearch = client_factory(hosts, client_options).create()

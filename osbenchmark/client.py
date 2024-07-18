@@ -391,6 +391,10 @@ def wait_for_rest_layer(opensearch, max_attempts=40):
     :param max_attempts: The maximum number of attempts to check whether the REST API is available.
     :return: True iff OpenSearch's REST API is available.
     """
+
+    # Always return true, as we are talking to Infino.
+    return True
+
     # assume that at least the hosts that we expect to contact should be available. Note that this is not 100%
     # bullet-proof as a cluster could have e.g. dedicated masters which are not contained in our list of target hosts
     # but this is still better than just checking for any random node's REST API being reachable.
