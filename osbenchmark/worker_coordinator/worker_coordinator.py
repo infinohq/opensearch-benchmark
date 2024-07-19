@@ -330,7 +330,14 @@ class WorkerCoordinatorActor(actor.BenchmarkActor):
         return self.createActor(WorkloadPreparationActor, targetActorRequirements=self._requirements(host))
 
     def _after_workload_prepared(self):
-        cluster_version = self.cluster_details["version"] if self.cluster_details else {}
+        # Change for Infino - use a dummy version number.
+        #cluster_version = self.cluster_details["version"] if self.cluster_details else {}
+        cluster_version = {
+            "build_flavor": "default",
+            "number": "1.0.0",
+            "build_hash": "abc123def456",
+        } 
+
         for child in self.children:
             self.send(child, thespian.actors.ActorExitRequest())
         self.children = []
