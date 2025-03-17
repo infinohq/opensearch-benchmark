@@ -40,6 +40,7 @@ from osbenchmark import version, actor, config, paths, \
 from osbenchmark.builder import provision_config, builder
 from osbenchmark.workload_generator import workload_generator
 from osbenchmark.utils import io, convert, process, console, net, opts, versions
+from osbenchmark import aggregator
 
 
 def create_arg_parser():
@@ -76,7 +77,7 @@ def create_arg_parser():
         workload_source_group = subparser.add_mutually_exclusive_group()
         workload_source_group.add_argument(
             "--workload-repository",
-            help="Define the repository from where Benchmark will load workloads (default: default).",
+            help="Define the repository from where OSB will load workloads (default: default).",
             # argparse is smart enough to use this default only if the user did not use --workload-path and also did not specify anything
             default="default"
         )
@@ -85,7 +86,7 @@ def create_arg_parser():
             help="Define the path to a workload.")
         subparser.add_argument(
             "--workload-revision",
-            help="Define a specific revision in the workload repository that Benchmark should use.",
+            help="Define a specific revision in the workload repository that OSB should use.",
             default=None)
 
     # try to preload configurable defaults, but this does not work together with `--configuration-name` (which is undocumented anyway)
@@ -98,9 +99,9 @@ def create_arg_parser():
 
     parser = argparse.ArgumentParser(prog=PROGRAM_NAME,
                                      description=BANNER + "\n\n A benchmarking tool for OpenSearch",
-                                     epilog="Find out more about Benchmark at {}".format(console.format.link(doc_link())),
+                                     epilog="Find out more about OSB at {}".format(console.format.link(doc_link())),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--version', action='version', version="%(prog)s " + version.version())
+    parser.add_argument('-v', '--version', action='version', version="%(prog)s " + version.version())
 
     if len(sys.argv) == 1:
         parser.print_help()
@@ -117,9 +118,10 @@ def create_arg_parser():
     list_parser.add_argument(
         "configuration",
         metavar="configuration",
-        help="The configuration for which Benchmark should show the available options. "
+        help="The configuration for which OSB should show the available options. "
              "Possible values are: telemetry, workloads, pipelines, test_executions, provision_config_instances, opensearch-plugins",
-        choices=["telemetry", "workloads", "pipelines", "test_executions", "provision_config_instances", "opensearch-plugins"])
+        choices=["telemetry", "workloads", "pipelines", "test_executions", "aggregated_results",
+                 "provision_config_instances", "opensearch-plugins"])
     list_parser.add_argument(
         "--limit",
         help="Limit the number of search results for recent test_executions (default: 10).",
@@ -131,6 +133,7 @@ def create_arg_parser():
     add_workload_source(info_parser)
     info_parser.add_argument(
         "--workload",
+        "-w",
         help=f"Define the workload to use. List possible workloads with `{PROGRAM_NAME} list workloads`."
         # we set the default value later on because we need to determine whether the user has provided this value.
         # default="geonames"
@@ -138,6 +141,7 @@ def create_arg_parser():
 
     info_parser.add_argument(
         "--workload-params",
+        "-wp",
         help="Define a comma-separated list of key:value pairs that are injected verbatim to the workload as variables.",
         default=""
     )
@@ -153,23 +157,27 @@ def create_arg_parser():
         "--exclude-tasks",
         help="Defines a comma-separated list of tasks not to run. By default all tasks of a test_procedure are run.")
 
-    create_workload_parser = subparsers.add_parser("create-workload", help="Create a Benchmark workload from existing data")
+    create_workload_parser = subparsers.add_parser("create-workload", help="Create a OSB workload from existing data")
     create_workload_parser.add_argument(
         "--workload",
+        "-w",
         required=True,
         help="Name of the generated workload")
     create_workload_parser.add_argument(
         "--indices",
+        "-i",
         type=non_empty_list,
         required=True,
         help="Comma-separated list of indices to include in the workload")
     create_workload_parser.add_argument(
         "--target-hosts",
+        "-t",
         default="",
         required=True,
         help="Comma-separated list of host:port pairs which should be targeted")
     create_workload_parser.add_argument(
         "--client-options",
+        "-c",
         default=opts.ClientOptions.DEFAULT_CLIENT_OPTIONS,
         help=f"Comma-separated list of client options to use. (default: {opts.ClientOptions.DEFAULT_CLIENT_OPTIONS})")
     create_workload_parser.add_argument(
@@ -191,10 +199,12 @@ def create_arg_parser():
     compare_parser = subparsers.add_parser("compare", help="Compare two test_executions")
     compare_parser.add_argument(
         "--baseline",
+        "-b",
         required=True,
         help=f"TestExecution ID of the baseline (see {PROGRAM_NAME} list test_executions).")
     compare_parser.add_argument(
         "--contender",
+        "-c",
         required=True,
         help=f"TestExecution ID of the contender (see {PROGRAM_NAME} list test_executions).")
     compare_parser.add_argument(
@@ -221,14 +231,34 @@ def create_arg_parser():
         help="Whether to include the comparison in the results file.",
         default=True)
 
+    aggregate_parser = subparsers.add_parser("aggregate", help="Aggregate multiple test_executions")
+    aggregate_parser.add_argument(
+        "--test-executions",
+        type=non_empty_list,
+        required=True,
+        help="Comma-separated list of TestExecution IDs to aggregate")
+    aggregate_parser.add_argument(
+        "--test-execution-id",
+        "-tid",
+        help="Define a unique id for this aggregated test_execution.",
+        default="")
+    aggregate_parser.add_argument(
+        "--results-file",
+        help="Write the aggregated results to the provided file.",
+        default="")
+    aggregate_parser.add_argument(
+        "--workload-repository",
+        help="Define the repository from where OSB will load workloads (default: default).",
+        default="default")
+
     download_parser = subparsers.add_parser("download", help="Downloads an artifact")
     download_parser.add_argument(
         "--provision-config-repository",
-        help="Define the repository from where Benchmark will load provision_configs and provision_config_instances (default: default).",
+        help="Define the repository from where OSB will load provision_configs and provision_config_instances (default: default).",
         default="default")
     download_parser.add_argument(
         "--provision-config-revision",
-        help="Define a specific revision in the provision_config repository that Benchmark should use.",
+        help="Define a specific revision in the provision_config repository that OSB should use.",
         default=None)
     download_parser.add_argument(
         "--provision-config-path",
@@ -279,11 +309,11 @@ def create_arg_parser():
         default="tar")
     install_parser.add_argument(
         "--provision-config-repository",
-        help="Define the repository from where Benchmark will load provision_configs and provision_config_instances (default: default).",
+        help="Define the repository from where OSB will load provision_configs and provision_config_instances (default: default).",
         default="default")
     install_parser.add_argument(
         "--provision-config-revision",
-        help="Define a specific revision in the provision_config repository that Benchmark should use.",
+        help="Define a specific revision in the provision_config repository that OSB should use.",
         default=None)
     install_parser.add_argument(
         "--provision-config-path",
@@ -360,6 +390,7 @@ def create_arg_parser():
         default="")
     start_parser.add_argument(
         "--test-execution-id",
+        "-tid",
         required=True,
         help="Define a unique id for this test_execution.",
         default="")
@@ -406,15 +437,16 @@ def create_arg_parser():
             help="Define the path to the provision_config_instance and plugin configurations to use.")
         p.add_argument(
             "--provision-config-repository",
-            help="Define repository from where Benchmark will load provision_configs and provision_config_instances (default: default).",
+            help="Define repository from where OSB will load provision_configs and provision_config_instances (default: default).",
             default="default")
         p.add_argument(
             "--provision-config-revision",
-            help="Define a specific revision in the provision_config repository that Benchmark should use.",
+            help="Define a specific revision in the provision_config repository that OSB should use.",
             default=None)
 
     test_execution_parser.add_argument(
         "--test-execution-id",
+        "-tid",
         help="Define a unique id for this test_execution.",
         default=str(uuid.uuid4()))
     test_execution_parser.add_argument(
@@ -434,10 +466,12 @@ def create_arg_parser():
     add_workload_source(test_execution_parser)
     test_execution_parser.add_argument(
         "--workload",
+        "-w",
         help=f"Define the workload to use. List possible workloads with `{PROGRAM_NAME} list workloads`."
     )
     test_execution_parser.add_argument(
         "--workload-params",
+        "-wp",
         help="Define a comma-separated list of key:value pairs that are injected verbatim to the workload as variables.",
         default=""
     )
@@ -471,6 +505,7 @@ def create_arg_parser():
     )
     test_execution_parser.add_argument(
         "--target-hosts",
+        "-t",
         help="Define a comma-separated list of host:port pairs which should be targeted if using the pipeline 'benchmark-only' "
              "(default: localhost:9200).",
         default="")  # actually the default is pipeline specific and it is set later
@@ -480,12 +515,13 @@ def create_arg_parser():
         default="localhost")
     test_execution_parser.add_argument(
         "--client-options",
+        "-c",
         help=f"Define a comma-separated list of client options to use. The options will be passed to the OpenSearch "
              f"Python client (default: {opts.ClientOptions.DEFAULT_CLIENT_OPTIONS}).",
         default=opts.ClientOptions.DEFAULT_CLIENT_OPTIONS)
     test_execution_parser.add_argument("--on-error",
                              choices=["continue", "abort"],
-                             help="Controls how Benchmark behaves on response errors (default: continue).",
+                             help="Controls how OSB behaves on response errors (default: continue).",
                              default="continue")
     test_execution_parser.add_argument(
         "--telemetry",
@@ -545,7 +581,7 @@ def create_arg_parser():
         action="store_true")
     test_execution_parser.add_argument(
         "--enable-worker-coordinator-profiling",
-        help="Enables a profiler for analyzing the performance of calls in Benchmark's worker coordinator (default: false).",
+        help="Enables a profiler for analyzing the performance of calls in OSB's worker coordinator (default: false).",
         default=False,
         action="store_true")
     test_execution_parser.add_argument(
@@ -555,9 +591,10 @@ def create_arg_parser():
         action="store_true")
     test_execution_parser.add_argument(
         "--kill-running-processes",
+        "-k",
         action="store_true",
         default=False,
-        help="If any processes is running, it is going to kill them and allow Benchmark to continue to run."
+        help="If any processes is running, it is going to kill them and allow OSB to continue to run."
     )
     test_execution_parser.add_argument(
         "--latency-percentiles",
@@ -578,7 +615,6 @@ def create_arg_parser():
         action="store_true")
     test_execution_parser.add_argument(
         "--randomization-repeat-frequency",
-        "-rf",
         help=f"The repeat_frequency for query randomization. Ignored if randomization is off"
              f"(default: {workload.loader.QueryRandomizerWorkloadProcessor.DEFAULT_RF}).",
         default=workload.loader.QueryRandomizerWorkloadProcessor.DEFAULT_RF)
@@ -593,13 +629,36 @@ def create_arg_parser():
              f"high values favor the most common queries. "
              f"Ignored if randomization is off (default: {workload.loader.QueryRandomizerWorkloadProcessor.DEFAULT_ALPHA}).",
         default=workload.loader.QueryRandomizerWorkloadProcessor.DEFAULT_ALPHA)
+    test_execution_parser.add_argument(
+        "--test-iterations",
+        help="The number of times to run the workload (default: 1).",
+        default=1)
+    test_execution_parser.add_argument(
+        "--aggregate",
+        type=lambda x: (str(x).lower() in ['true', '1', 'yes', 'y']),
+        help="Aggregate the results of multiple test executions (default: true).",
+        default=True)
+    test_execution_parser.add_argument(
+        "--sleep-timer",
+        help="Sleep for the specified number of seconds before starting the next test execution (default: 5).",
+        default=5)
+    test_execution_parser.add_argument(
+        "--cancel-on-error",
+        action="store_true",
+        help="Stop executing tests if an error occurs in one of the test iterations (default: false).",
+    )
+    test_execution_parser.add_argument(
+        "--load-test-qps",
+        help="Run a load test on your cluster, up to a certain QPS value (default: 0)",
+        default=0
+    )
 
     ###############################################################################
     #
     # The options below are undocumented and can be removed or changed at any time.
     #
     ###############################################################################
-    # This option is intended to tell Benchmark to assume a different start date than 'now'. This is effectively just useful for things like
+    # This option is intended to tell OSB to assume a different start date than 'now'. This is effectively just useful for things like
     # backtesting or a benchmark run across environments (think: comparison of EC2 and bare metal) but never for the typical user.
     test_execution_parser.add_argument(
         "--effective-start-date",
@@ -613,8 +672,8 @@ def create_arg_parser():
         action="store_true",
         default=False)
 
-    for p in [list_parser, test_execution_parser, compare_parser, download_parser, install_parser,
-              start_parser, stop_parser, info_parser, create_workload_parser]:
+    for p in [list_parser, test_execution_parser, compare_parser, aggregate_parser,
+              download_parser, install_parser, start_parser, stop_parser, info_parser, create_workload_parser]:
         # This option is needed to support a separate configuration for the integration tests on the same machine
         p.add_argument(
             "--configuration-name",
@@ -627,7 +686,7 @@ def create_arg_parser():
             action="store_true")
         p.add_argument(
             "--offline",
-            help="Assume that Benchmark has no connection to the Internet (default: false).",
+            help="Assume that OSB has no connection to the Internet (default: false).",
             default=False,
             action="store_true")
 
@@ -644,6 +703,8 @@ def dispatch_list(cfg):
         test_execution_orchestrator.list_pipelines()
     elif what == "test_executions":
         metrics.list_test_executions(cfg)
+    elif what == "aggregated_results":
+        metrics.list_aggregated_results(cfg)
     elif what == "provision_config_instances":
         provision_config.list_provision_config_instances(cfg)
     elif what == "opensearch-plugins":
@@ -667,23 +728,23 @@ def execute_test(cfg, kill_running_processes=False):
     logger = logging.getLogger(__name__)
 
     if kill_running_processes:
-        logger.info("Killing running Benchmark processes")
+        logger.info("Killing running OSB processes")
 
-        # Kill any lingering Benchmark processes before attempting to continue - the actor system needs to be a singleton on this machine
+        # Kill any lingering OSB processes before attempting to continue - the actor system needs to be a singleton on this machine
         # noinspection PyBroadException
         try:
             process.kill_running_benchmark_instances()
         except BaseException:
             logger.exception(
-                "Could not terminate potentially running Benchmark instances correctly. Attempting to go on anyway.")
+                "Could not terminate potentially running OSB instances correctly. Attempting to go on anyway.")
     else:
         other_benchmark_processes = process.find_all_other_benchmark_processes()
         if other_benchmark_processes:
             pids = [p.pid for p in other_benchmark_processes]
 
-            msg = f"There are other Benchmark processes running on this machine (PIDs: {pids}) but only one Benchmark " \
+            msg = f"There are other OSB processes running on this machine (PIDs: {pids}) but only one OSB " \
                   f"benchmark is allowed to run at the same time.\n\nYou can use --kill-running-processes flag " \
-                  f"to kill running processes automatically and allow Benchmark to continue to run a new benchmark. " \
+                  f"to kill running processes automatically and allow OSB to continue to run a new benchmark. " \
                   f"Otherwise, you need to manually kill them."
             raise exceptions.BenchmarkError(msg)
 
@@ -741,7 +802,7 @@ def with_actor_system(runnable, cfg):
                 except KeyboardInterrupt:
                     times_interrupted += 1
                     logger.warning("User interrupted shutdown of internal actor system.")
-                    console.info("Please wait a moment for Benchmark's internal components to shutdown.")
+                    console.info("Please wait a moment for OSB's internal components to shutdown.")
             if not shutdown_complete and times_interrupted > 0:
                 logger.warning("Terminating after user has interrupted actor system shutdown explicitly for [%d] times.",
                                times_interrupted)
@@ -754,7 +815,7 @@ def with_actor_system(runnable, cfg):
                 console.println("")
             elif not shutdown_complete:
                 console.warn("Could not terminate all internal processes within timeout. Please check and force-terminate "
-                             "all Benchmark processes.")
+                             "all OSB processes.")
 
 
 
@@ -815,6 +876,19 @@ def configure_builder_params(args, cfg, command_requires_provision_config_instan
 
 
 def configure_connection_params(arg_parser, args, cfg):
+    # Check if multiple hosts are specified using comma separator
+    if args.target_hosts and "," in args.target_hosts:
+        console.warn(
+            "WARNING: Benchmark runs with multiple target hosts should be passed in as a JSON file such as:\n"
+            "{\n"
+            '  "default": [\n'
+            '    {"host": "127.0.0.1", "port": 9200} # Specify nodes for cluster 1\n'
+            "  ],\n"
+            '  "remote":[\n'
+            '    {"host": "10.127.0.3", "port": 9200} # Specify nodes for cluster 2\n'
+            "  ]\n"
+            "}"
+        )
     # Also needed by builder (-> telemetry) - duplicate by module?
     target_hosts = opts.TargetHosts(args.target_hosts)
     cfg.add(config.Scope.applicationOverride, "client", "hosts", target_hosts)
@@ -832,6 +906,59 @@ def configure_results_publishing_params(args, cfg):
     cfg.add(config.Scope.applicationOverride, "results_publishing", "output.path", args.results_file)
     cfg.add(config.Scope.applicationOverride, "results_publishing", "numbers.align", args.results_numbers_align)
 
+def prepare_test_executions_dict(args, cfg):
+    cfg.add(config.Scope.applicationOverride, "results_publishing", "output.path", args.results_file)
+    test_executions_dict = {}
+    if args.test_executions:
+        for execution in args.test_executions:
+            execution = execution.strip()
+            if execution:
+                test_executions_dict[execution] = None
+    return test_executions_dict
+
+def configure_test(arg_parser, args, cfg):
+    # As the execute-test command is doing more work than necessary at the moment, we duplicate several parameters
+    # in this section that actually belong to dedicated subcommands (like install, start or stop). Over time
+    # these duplicated parameters will vanish as we move towards dedicated subcommands and use "execute-test" only
+    # to run the actual benchmark (i.e. generating load).
+    print_test_execution_id(args)
+    if args.effective_start_date:
+        cfg.add(config.Scope.applicationOverride, "system", "time.start", args.effective_start_date)
+    cfg.add(config.Scope.applicationOverride, "system", "test_execution.id", args.test_execution_id)
+    # use the test_execution id implicitly also as the install id.
+    cfg.add(config.Scope.applicationOverride, "system", "install.id", args.test_execution_id)
+    cfg.add(config.Scope.applicationOverride, "test_execution", "pipeline", args.pipeline)
+    cfg.add(config.Scope.applicationOverride, "test_execution", "user.tag", args.user_tag)
+    cfg.add(config.Scope.applicationOverride, "worker_coordinator", "profiling", args.enable_worker_coordinator_profiling)
+    cfg.add(config.Scope.applicationOverride, "worker_coordinator", "assertions", args.enable_assertions)
+    cfg.add(config.Scope.applicationOverride, "worker_coordinator", "on.error", args.on_error)
+    cfg.add(
+        config.Scope.applicationOverride,
+        "worker_coordinator",
+        "load_worker_coordinator_hosts",
+        opts.csv_to_list(args.load_worker_coordinator_hosts))
+    cfg.add(config.Scope.applicationOverride, "workload", "test.mode.enabled", args.test_mode)
+    cfg.add(config.Scope.applicationOverride, "workload", "load.test.clients", int(args.load_test_qps))
+    cfg.add(config.Scope.applicationOverride, "workload", "latency.percentiles", args.latency_percentiles)
+    cfg.add(config.Scope.applicationOverride, "workload", "throughput.percentiles", args.throughput_percentiles)
+    cfg.add(config.Scope.applicationOverride, "workload", "randomization.enabled", args.randomization_enabled)
+    cfg.add(config.Scope.applicationOverride, "workload", "randomization.repeat_frequency", args.randomization_repeat_frequency)
+    cfg.add(config.Scope.applicationOverride, "workload", "randomization.n", args.randomization_n)
+    cfg.add(config.Scope.applicationOverride, "workload", "randomization.alpha", args.randomization_alpha)
+    configure_workload_params(arg_parser, args, cfg)
+    configure_connection_params(arg_parser, args, cfg)
+    configure_telemetry_params(args, cfg)
+    configure_builder_params(args, cfg)
+    cfg.add(config.Scope.applicationOverride, "builder", "runtime.jdk", args.runtime_jdk)
+    cfg.add(config.Scope.applicationOverride, "builder", "source.revision", args.revision)
+    cfg.add(config.Scope.applicationOverride, "builder",
+    "provision_config_instance.plugins", opts.csv_to_list(
+        args.opensearch_plugins))
+    cfg.add(config.Scope.applicationOverride, "builder", "plugin.params", opts.to_dict(args.plugin_params))
+    cfg.add(config.Scope.applicationOverride, "builder", "preserve.install", convert.to_bool(args.preserve_install))
+    cfg.add(config.Scope.applicationOverride, "builder", "skip.rest.api.check", convert.to_bool(args.skip_rest_api_check))
+
+    configure_results_publishing_params(args, cfg)
 
 def print_test_execution_id(args):
     console.info(f"[Test Execution ID]: {args.test_execution_id}")
@@ -847,6 +974,10 @@ def dispatch_sub_command(arg_parser, args, cfg):
             configure_results_publishing_params(args, cfg)
             cfg.add(config.Scope.applicationOverride, "results_publishing", "percentiles", args.percentiles)
             results_publisher.compare(cfg, args.baseline, args.contender)
+        elif sub_command == "aggregate":
+            test_executions_dict = prepare_test_executions_dict(args, cfg)
+            aggregator_instance = aggregator.Aggregator(cfg, test_executions_dict, args)
+            aggregator_instance.aggregate()
         elif sub_command == "list":
             cfg.add(config.Scope.applicationOverride, "system", "list.config.option", args.configuration)
             cfg.add(config.Scope.applicationOverride, "system", "list.test_executions.max_results", args.limit)
@@ -886,49 +1017,32 @@ def dispatch_sub_command(arg_parser, args, cfg):
             cfg.add(config.Scope.applicationOverride, "system", "install.id", args.installation_id)
             builder.stop(cfg)
         elif sub_command == "execute-test":
-            # As the execute-test command is doing more work than necessary at the moment, we duplicate several parameters
-            # in this section that actually belong to dedicated subcommands (like install, start or stop). Over time
-            # these duplicated parameters will vanish as we move towards dedicated subcommands and use "execute-test" only
-            # to run the actual benchmark (i.e. generating load).
-            print_test_execution_id(args)
-            if args.effective_start_date:
-                cfg.add(config.Scope.applicationOverride, "system", "time.start", args.effective_start_date)
-            cfg.add(config.Scope.applicationOverride, "system", "test_execution.id", args.test_execution_id)
-            # use the test_execution id implicitly also as the install id.
-            cfg.add(config.Scope.applicationOverride, "system", "install.id", args.test_execution_id)
-            cfg.add(config.Scope.applicationOverride, "test_execution", "pipeline", args.pipeline)
-            cfg.add(config.Scope.applicationOverride, "test_execution", "user.tag", args.user_tag)
-            cfg.add(config.Scope.applicationOverride, "worker_coordinator", "profiling", args.enable_worker_coordinator_profiling)
-            cfg.add(config.Scope.applicationOverride, "worker_coordinator", "assertions", args.enable_assertions)
-            cfg.add(config.Scope.applicationOverride, "worker_coordinator", "on.error", args.on_error)
-            cfg.add(
-                config.Scope.applicationOverride,
-                "worker_coordinator",
-                "load_worker_coordinator_hosts",
-                opts.csv_to_list(args.load_worker_coordinator_hosts))
-            cfg.add(config.Scope.applicationOverride, "workload", "test.mode.enabled", args.test_mode)
-            cfg.add(config.Scope.applicationOverride, "workload", "latency.percentiles", args.latency_percentiles)
-            cfg.add(config.Scope.applicationOverride, "workload", "throughput.percentiles", args.throughput_percentiles)
-            cfg.add(config.Scope.applicationOverride, "workload", "randomization.enabled", args.randomization_enabled)
-            cfg.add(config.Scope.applicationOverride, "workload", "randomization.repeat_frequency", args.randomization_repeat_frequency)
-            cfg.add(config.Scope.applicationOverride, "workload", "randomization.n", args.randomization_n)
-            cfg.add(config.Scope.applicationOverride, "workload", "randomization.alpha", args.randomization_alpha)
-            configure_workload_params(arg_parser, args, cfg)
-            configure_connection_params(arg_parser, args, cfg)
-            configure_telemetry_params(args, cfg)
-            configure_builder_params(args, cfg)
-            cfg.add(config.Scope.applicationOverride, "builder", "runtime.jdk", args.runtime_jdk)
-            cfg.add(config.Scope.applicationOverride, "builder", "source.revision", args.revision)
-            cfg.add(config.Scope.applicationOverride, "builder",
-            "provision_config_instance.plugins", opts.csv_to_list(
-                args.opensearch_plugins))
-            cfg.add(config.Scope.applicationOverride, "builder", "plugin.params", opts.to_dict(args.plugin_params))
-            cfg.add(config.Scope.applicationOverride, "builder", "preserve.install", convert.to_bool(args.preserve_install))
-            cfg.add(config.Scope.applicationOverride, "builder", "skip.rest.api.check", convert.to_bool(args.skip_rest_api_check))
+            iterations = int(args.test_iterations)
+            if iterations > 1:
+                test_exes = []
+                for _ in range(iterations):
+                    try:
+                        configure_test(arg_parser, args, cfg)
+                        execute_test(cfg, args.kill_running_processes)
+                        time.sleep(int(args.sleep_timer))
+                        test_exes.append(args.test_execution_id)
+                        args.test_execution_id = str(uuid.uuid4())
+                    except Exception as e:
+                        console.error(f"Error occurred during test execution {_+1}: {str(e)}")
+                        if args.cancel_on_error:
+                            console.info("Cancelling remaining test executions.")
+                            break
 
-            configure_results_publishing_params(args, cfg)
-
-            execute_test(cfg, args.kill_running_processes)
+                if args.aggregate:
+                    args.test_executions = test_exes
+                    test_executions_dict = prepare_test_executions_dict(args, cfg)
+                    aggregator_instance = aggregator.Aggregator(cfg, test_executions_dict, args)
+                    aggregator_instance.aggregate()
+            elif args.test_iterations == 1:
+                configure_test(arg_parser, args, cfg)
+                execute_test(cfg, args.kill_running_processes)
+            else:
+                console.info("Please enter a valid number of test iterations")
         elif sub_command == "create-workload":
             cfg.add(config.Scope.applicationOverride, "generator", "indices", args.indices)
             cfg.add(config.Scope.applicationOverride, "generator", "number_of_docs", args.number_of_docs)
@@ -995,7 +1109,7 @@ def main():
 
     logger.info("OS [%s]", str(platform.uname()))
     logger.info("Python [%s]", str(sys.implementation))
-    logger.info("Benchmark version [%s]", version.version())
+    logger.info("OSB version [%s]", version.version())
     logger.debug("Command line arguments: %s", args)
     # Configure networking
     net.init()

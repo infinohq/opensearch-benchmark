@@ -294,9 +294,9 @@ class OpenSearchInstaller:
             "data_paths": self.data_paths,
             "log_path": self.node_log_dir,
             "heap_dump_path": self.heap_dump_dir,
-            # this is the node's IP address as specified by the user when invoking Benchmark
+            # this is the node's IP address as specified by the user when invoking OSB
             "node_ip": self.node_ip,
-            # this is the IP address that the node will be bound to. Benchmark will bind to the node's IP address (but not to 0.0.0.0). The
+            # this is the IP address that the node will be bound to. OSB will bind to the node's IP address (but not to 0.0.0.0). The
             "network_host": network_host,
             "http_port": str(self.http_port),
             "transport_port": str(self.http_port + 100),
@@ -346,7 +346,7 @@ class PluginInstaller:
             self.logger.info("Installing [%s] into [%s]", self.plugin_name, os_home_path)
             install_cmd = '%s install --batch "%s"' % (installer_binary_path, self.plugin_name)
 
-        return_code = process.run_subprocess_with_logging(install_cmd, env=self.env())
+        output, return_code = process.run_subprocess_with_logging(install_cmd, env=self.env(), capture_output=True)
         if return_code == 0:
             self.logger.info("Successfully installed [%s].", self.plugin_name)
         elif return_code == 64:
@@ -356,9 +356,9 @@ class PluginInstaller:
             raise exceptions.SupplyError("I/O error while trying to install [%s]" % self.plugin_name)
         else:
             raise exceptions.BenchmarkError(
-                "Unknown error while trying to install [%s] (installer return code [%s]). "
+                "Unknown error '%s' while trying to install [%s] (installer return code [%s]). "
                 "Please check the logs." %
-                                        (self.plugin_name, str(return_code)))
+                                        (output, self.plugin_name, str(return_code)))
 
     def invoke_install_hook(self, phase, variables):
         self.hook_handler.invoke(phase.name, variables=variables, env=self.env())

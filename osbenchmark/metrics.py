@@ -283,7 +283,7 @@ class OsClientFactory:
 
 class IndexTemplateProvider:
     """
-    Abstracts how the Benchmark index template is retrieved. Intended for testing.
+    Abstracts how the OSB index template is retrieved. Intended for testing.
     """
 
     def __init__(self, cfg):
@@ -542,7 +542,7 @@ class MetricsStore:
 
     def _clear_meta_info(self):
         """
-        Clears all internally stored meta-info. This is considered Benchmark internal API and not intended for normal client consumption.
+        Clears all internally stored meta-info. This is considered OSB internal API and not intended for normal client consumption.
         """
         self._meta_info = {
             MetaInfoScope.cluster: {},
@@ -1275,7 +1275,7 @@ def results_store(cfg):
         return NoopResultsStore()
 
 
-def list_test_executions(cfg):
+def list_test_helper(store_item, title):
     def format_dict(d):
         if d:
             items = sorted(d.items())
@@ -1284,7 +1284,7 @@ def list_test_executions(cfg):
             return None
 
     test_executions = []
-    for test_execution in test_execution_store(cfg).list():
+    for test_execution in store_item:
         test_executions.append([
             test_execution.test_execution_id,
             time.to_iso8601(test_execution.test_execution_timestamp),
@@ -1297,7 +1297,7 @@ def list_test_executions(cfg):
             test_execution.provision_config_revision])
 
     if len(test_executions) > 0:
-        console.println("\nRecent test_executions:\n")
+        console.println(f"\nRecent {title}:\n")
         console.println(tabulate.tabulate(
             test_executions,
             headers=[
@@ -1313,8 +1313,13 @@ def list_test_executions(cfg):
                 ]))
     else:
         console.println("")
-        console.println("No recent test_executions found.")
+        console.println(f"No recent {title} found.")
 
+def list_test_executions(cfg):
+    list_test_helper(test_execution_store(cfg).list(), "test_executions")
+
+def list_aggregated_results(cfg):
+    list_test_helper(test_execution_store(cfg).list_aggregations(), "aggregated_results")
 
 def create_test_execution(cfg, workload, test_procedure, workload_revision=None):
     provision_config_instance = cfg.opts("builder", "provision_config_instance.names")
@@ -1440,7 +1445,6 @@ class TestExecution:
         if self.plugin_params:
             d["plugin-params"] = self.plugin_params
         return d
-
     def to_result_dicts(self):
         """
         :return: a list of dicts, suitable for persisting the results of this test execution in a format that is Kibana-friendly.
@@ -1551,16 +1555,33 @@ class FileTestExecutionStore(TestExecutionStore):
         with open(self._test_execution_file(), mode="wt", encoding="utf-8") as f:
             f.write(json.dumps(doc, indent=True, ensure_ascii=False))
 
-    def _test_execution_file(self, test_execution_id=None):
-        return os.path.join(paths.test_execution_root(cfg=self.cfg, test_execution_id=test_execution_id), "test_execution.json")
+    def store_aggregated_execution(self, test_execution):
+        doc = test_execution.as_dict()
+        aggregated_execution_path = paths.aggregated_results_root(self.cfg, test_execution_id=test_execution.test_execution_id)
+        io.ensure_dir(aggregated_execution_path)
+        aggregated_file = os.path.join(aggregated_execution_path, "aggregated_test_execution.json")
+        with open(aggregated_file, mode="wt", encoding="utf-8") as f:
+            f.write(json.dumps(doc, indent=True, ensure_ascii=False))
+
+    def _test_execution_file(self, test_execution_id=None, is_aggregated=False):
+        if is_aggregated:
+            return os.path.join(paths.aggregated_results_root(cfg=self.cfg, test_execution_id=test_execution_id),
+                                "aggregated_test_execution.json")
+        else:
+            return os.path.join(paths.test_execution_root(cfg=self.cfg, test_execution_id=test_execution_id), "test_execution.json")
 
     def list(self):
         results = glob.glob(self._test_execution_file(test_execution_id="*"))
         all_test_executions = self._to_test_executions(results)
         return all_test_executions[:self._max_results()]
 
+    def list_aggregations(self):
+        aggregated_results = glob.glob(self._test_execution_file(test_execution_id="*", is_aggregated=True))
+        return self._to_test_executions(aggregated_results)
+
     def find_by_test_execution_id(self, test_execution_id):
-        test_execution_file = self._test_execution_file(test_execution_id=test_execution_id)
+        is_aggregated = test_execution_id.startswith('aggregate')
+        test_execution_file = self._test_execution_file(test_execution_id=test_execution_id, is_aggregated=is_aggregated)
         if io.exists(test_execution_file):
             test_executions = self._to_test_executions([test_execution_file])
             if test_executions:
@@ -1784,6 +1805,7 @@ class GlobalStatsCalculator:
                 op_type = task.operation.type
                 error_rate = self.error_rate(t, op_type)
                 duration = self.duration(t)
+
                 if task.operation.include_in_results_publishing or error_rate > 0:
                     self.logger.debug("Gathering request metrics for [%s].", t)
                     result.add_op_metrics(
@@ -1800,8 +1822,19 @@ class GlobalStatsCalculator:
                             self.workload.meta_data,
                             self.test_procedure.meta_data,
                             task.operation.meta_data,
-                            task.meta_data)
+                            task.meta_data,
+                        ),
                     )
+
+                    result.add_correctness_metrics(
+                        t,
+                        task.operation.name,
+                        self.single_latency(t, op_type, metric_name="recall@k"),
+                        self.single_latency(t, op_type, metric_name="recall@1"),
+                        error_rate,
+                        duration,
+                    )
+
         self.logger.debug("Gathering indexing metrics.")
         result.total_time = self.sum("indexing_total_time")
         result.total_time_per_shard = self.shard_stats("indexing_total_time")
@@ -1996,6 +2029,7 @@ class GlobalStatsCalculator:
 class GlobalStats:
     def __init__(self, d=None):
         self.op_metrics = self.v(d, "op_metrics", default=[])
+        self.correctness_metrics = self.v(d, "correctness_metrics", default=[])
         self.total_time = self.v(d, "total_time")
         self.total_time_per_shard = self.v(d, "total_time_per_shard", default={})
         self.indexing_throttle_time = self.v(d, "indexing_throttle_time")
@@ -2081,6 +2115,22 @@ class GlobalStats:
                             "max": item["max"]
                         }
                     })
+            elif metric == "correctness_metrics":
+                for item in value:
+                    if "recall@k" in item:
+                        all_results.append({
+                            "task": item["task"],
+                            "operation": item["operation"],
+                            "name": "recall@k",
+                            "value": item["recall@k"]
+                        })
+                    if "recall@1" in item:
+                        all_results.append({
+                            "task": item["task"],
+                            "operation": item["operation"],
+                            "name": "recall@1",
+                            "value": item["recall@1"]
+                        })
             elif metric.startswith("total_transform_") and value is not None:
                 for item in value:
                     all_results.append({
@@ -2124,12 +2174,23 @@ class GlobalStats:
             doc["meta"] = meta
         self.op_metrics.append(doc)
 
+    def add_correctness_metrics(self, task, operation, recall_at_k_stats, recall_at_1_stats, error_rate, duration):
+        self.correctness_metrics.append({
+            "task": task,
+            "operation": operation,
+            "recall@k": recall_at_k_stats,
+            "recall@1":recall_at_1_stats,
+            "error_rate": error_rate,
+            "duration": duration
+            }
+            )
+
     def tasks(self):
-        # ensure we can read test_execution.json files before Benchmark 0.8.0
+        # ensure we can read test_execution.json files before OSB 0.8.0
         return [v.get("task", v["operation"]) for v in self.op_metrics]
 
     def metrics(self, task):
-        # ensure we can read test_execution.json files before Benchmark 0.8.0
+        # ensure we can read test_execution.json files before OSB 0.8.0
         for r in self.op_metrics:
             if r.get("task", r["operation"]) == task:
                 return r

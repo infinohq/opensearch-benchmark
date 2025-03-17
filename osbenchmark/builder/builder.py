@@ -62,6 +62,14 @@ def install(cfg):
     master_nodes = cfg.opts("builder", "master.nodes")
     seed_hosts = cfg.opts("builder", "seed.hosts")
 
+    # Ensure node_name and master_nodes match, using node_name as the default
+    if node_name not in master_nodes:
+        print(
+            f"The provided --node-name '{node_name}' and --master-nodes '{master_nodes}' are different. "
+            f"Using '{node_name}' for both node name and initial master node."
+        )
+        master_nodes = [node_name]
+
     if build_type == "tar":
         binary_supplier = supplier.create(cfg, sources, distribution, provision_config_instance, plugins)
         p = provisioner.local(cfg=cfg, provision_config_instance=provision_config_instance, plugins=plugins, ip=ip, http_port=http_port,
@@ -284,7 +292,7 @@ def to_ip_port(hosts):
         host_or_ip = host.pop("host")
         port = host.pop("port", 9200)
         if host:
-            raise exceptions.SystemSetupError("When specifying nodes to be managed by Benchmark you can only supply "
+            raise exceptions.SystemSetupError("When specifying nodes to be managed by OSB you can only supply "
                                               "hostname:port pairs (e.g. 'localhost:9200'), any additional options cannot "
                                               "be supported.")
         ip = net.resolve(host_or_ip)
@@ -349,7 +357,7 @@ class BuilderActor(actor.BenchmarkActor):
         self.logger.info("BuilderActor#receiveMessage poison(msg = [%s] sender = [%s])", str(msg.poisonMessage), str(sender))
         # something went wrong with a child actor (or another actor with which we have communicated)
         if isinstance(msg.poisonMessage, StartEngine):
-            failmsg = "Could not start benchmark candidate. Are Benchmark daemons on all targeted machines running?"
+            failmsg = "Could not start benchmark candidate. Are OSB daemons on all targeted machines running?"
         else:
             failmsg = msg.details
         self.logger.error(failmsg)
@@ -371,14 +379,14 @@ class BuilderActor(actor.BenchmarkActor):
 
         self.externally_provisioned = msg.external
         if self.externally_provisioned:
-            self.logger.info("Cluster will not be provisioned by Benchmark.")
+            self.logger.info("Cluster will not be provisioned by OSB.")
             self.status = "nodes_started"
             self.received_responses = []
             self.on_all_nodes_started()
             self.status = "cluster_started"
         else:
             console.info("Preparing for test execution ...", flush=True)
-            self.logger.info("Cluster consisting of %s will be provisioned by Benchmark.", hosts)
+            self.logger.info("Cluster consisting of %s will be provisioned by OSB.", hosts)
             msg.hosts = hosts
             # Initialize the children array to have the right size to
             # ensure waiting for all responses
@@ -495,12 +503,12 @@ class Dispatcher(actor.BenchmarkActor):
 
     def receiveMsg_ActorSystemConventionUpdate(self, convmsg, sender):
         if not convmsg.remoteAdded:
-            self.logger.warning("Remote Benchmark node [%s] exited during NodeBuilderActor startup process.", convmsg.remoteAdminAddress)
+            self.logger.warning("Remote OSB node [%s] exited during NodeBuilderActor startup process.", convmsg.remoteAdminAddress)
             self.start_sender(actor.BenchmarkFailure(
-                "Remote Benchmark node [%s] has been shutdown prematurely." % convmsg.remoteAdminAddress))
+                "Remote OSB node [%s] has been shutdown prematurely." % convmsg.remoteAdminAddress))
         else:
             remote_ip = convmsg.remoteCapabilities.get('ip', None)
-            self.logger.info("Remote Benchmark node [%s] has started.", remote_ip)
+            self.logger.info("Remote OSB node [%s] has started.", remote_ip)
 
             for eachmsg in self.remotes[remote_ip]:
                 self.pending.append((self.createActor(NodeBuilderActor,
@@ -648,7 +656,7 @@ def create(cfg, metrics_store, node_ip, node_http_port, all_node_ips, all_node_i
                                   all_node_names, test_execution_root_path, node_name))
         l = launcher.ProcessLauncher(cfg)
     elif external:
-        raise exceptions.BenchmarkAssertionError("Externally provisioned clusters should not need to be managed by Benchmark's builder")
+        raise exceptions.BenchmarkAssertionError("Externally provisioned clusters should not need to be managed by OSB's builder")
     elif docker:
         if len(plugins) > 0:
             raise exceptions.SystemSetupError("You cannot specify any plugins for Docker clusters. Please remove "
