@@ -335,7 +335,7 @@ class WorkerCoordinatorActor(actor.BenchmarkActor):
             "build_flavor": "default",
             "number": "1.0.0",
             "build_hash": "abc123def456",
-        } 
+        }
 
         for child in self.children:
             self.send(child, thespian.actors.ActorExitRequest())

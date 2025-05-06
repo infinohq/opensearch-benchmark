@@ -41,6 +41,7 @@ import multiprocessing
 from typing import List, Optional
 
 import ijson
+import opensearchpy
 from opensearchpy import ConnectionTimeout
 from opensearchpy import NotFoundError
 
@@ -464,6 +465,10 @@ class BulkIndex(Runner):
     Bulk indexes the given documents.
     """
 
+    # Add basic retry configuration
+    DEFAULT_MAX_RETRIES = 3
+    DEFAULT_RETRY_WAIT_TIME = 1.0  # seconds
+    
     async def __call__(self, opensearch, params):
         """
         Runs one bulk indexing operation.
@@ -495,8 +500,12 @@ class BulkIndex(Runner):
          in ``benchmarks/worker_coordinator``.
         * ``request-timeout``: a non-negative float indicating the client-side timeout for the operation.  If not present, defaults to
          ``None`` and potentially falls back to the global timeout setting.
+        * ``retries``: Number of retries for 429 errors. Defaults to DEFAULT_MAX_RETRIES.
+        * ``retry-wait-time``: Initial wait time between retries in seconds. This will increase exponentially with each retry.
         """
         detailed_results = params.get("detailed-results", False)
+        max_retries = params.get("retries", self.DEFAULT_MAX_RETRIES)
+        retry_wait_time = params.get("retry-wait-time", self.DEFAULT_RETRY_WAIT_TIME)
 
         bulk_params = {}
         if "pipeline" in params:
@@ -504,7 +513,7 @@ class BulkIndex(Runner):
 
         if "request-params" in params:
             bulk_params.update(params["request-params"])
-            params.pop( "request-params" )
+            params.pop("request-params")
 
         api_kwargs = self._default_kw_params(params)
 
@@ -515,27 +524,57 @@ class BulkIndex(Runner):
         # errors have occurred we only need a small amount of information from the potentially large response.
         if not detailed_results:
             opensearch.return_raw_response()
-        request_context_holder.on_client_request_start()
-
-        if with_action_metadata:
-            api_kwargs.pop("index", None)
-            # only half of the lines are documents
-            response = await opensearch.bulk(params=bulk_params, **api_kwargs)
-        else:
-            response = await opensearch.bulk(doc_type=params.get("type"), params=bulk_params, **api_kwargs)
-
-        request_context_holder.on_client_request_end()
-        stats = self.detailed_stats(params, response) if detailed_results else self.simple_stats(bulk_size, unit, response)
-
-        meta_data = {
-            "index": params.get("index"),
-            "weight": bulk_size,
-            "unit": unit,
-        }
-        meta_data.update(stats)
-        if not stats["success"]:
-            meta_data["error-type"] = "bulk"
-        return meta_data
+        
+        # Simple retry logic for 429 errors
+        retries = 0
+        while True:
+            try:
+                request_context_holder.on_client_request_start()
+                
+                if with_action_metadata:
+                    api_kwargs.pop("index", None)
+                    # only half of the lines are documents
+                    response = await opensearch.bulk(params=bulk_params, **api_kwargs)
+                else:
+                    response = await opensearch.bulk(doc_type=params.get("type"), params=bulk_params, **api_kwargs)
+                
+                request_context_holder.on_client_request_end()
+                
+                # Process the response to check for errors
+                stats = self.detailed_stats(params, response) if detailed_results else self.simple_stats(bulk_size, unit, response)
+                
+                # Check if we have a 429 error to handle
+                if not stats["success"] and stats.get("error-description") and "429" in stats.get("error-description") and retries < max_retries:
+                    retries += 1
+                    wait_time = retry_wait_time * (2 ** (retries - 1))  # Exponential backoff
+                    self.logger.warning("Received 429 Too Many Requests error. Retrying in %.2f seconds (attempt %d/%d)",
+                                       wait_time, retries, max_retries)
+                    await asyncio.sleep(wait_time)
+                    continue
+                
+                meta_data = {
+                    "index": params.get("index"),
+                    "weight": bulk_size,
+                    "unit": unit,
+                }
+                meta_data.update(stats)
+                if not stats["success"]:
+                    meta_data["error-type"] = "bulk"
+                return meta_data
+                
+            except opensearchpy.TransportError as e:
+                request_context_holder.on_client_request_end()
+                
+                # Retry on 429 errors
+                if hasattr(e, "status_code") and e.status_code == 429 and retries < max_retries:
+                    retries += 1
+                    wait_time = retry_wait_time * (2 ** (retries - 1))  # Exponential backoff
+                    self.logger.warning("Received 429 Too Many Requests error. Retrying in %.2f seconds (attempt %d/%d)",
+                                       wait_time, retries, max_retries)
+                    await asyncio.sleep(wait_time)
+                else:
+                    # Re-raise for other errors or if we've exceeded retries
+                    raise
 
     def detailed_stats(self, params, response):
         ops = {}
@@ -2648,7 +2687,6 @@ class Retry(Runner, Delegator):
 
     async def __call__(self, opensearch, params):
         # pylint: disable=import-outside-toplevel
-        import opensearchpy
         import socket
 
         retry_until_success = params.get("retry-until-success", self.retry_until_success)
