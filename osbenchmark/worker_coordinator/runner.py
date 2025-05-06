@@ -41,6 +41,7 @@ import multiprocessing
 from typing import List, Optional
 
 import ijson
+import opensearchpy
 from opensearchpy import ConnectionTimeout
 from opensearchpy import NotFoundError
 

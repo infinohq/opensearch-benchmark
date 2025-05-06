@@ -261,17 +261,18 @@ class NodesStopped:
 
 def cluster_distribution_version(cfg, client_factory=client.OsClientFactory):
     """
-    Attempt to get the cluster's distribution version even before it is actually started (which makes only sense for externally
-    provisioned clusters).
+    Attempt to get the exact elasticsearch distribution version for the configured cluster.
 
-    :param cfg: The current config object.
-    :param client_factory: Factory class that creates the OpenSearch client.
-    :return: The distribution version.
+    :param cfg: The Benchmark config object.
+    :param client_factory: A factory function for creating opensearch clients.
+    :return A string containing the distribution version number.
     """
 
     # Always return a fixed version for Infino.
     return "2.13.0"
 
+    # The following code is unreachable and kept only for reference
+    """
     hosts = cfg.opts("client", "hosts").default
     client_options = cfg.opts("client", "options").default
     opensearch = client_factory(hosts, client_options).create()
@@ -283,6 +284,7 @@ def cluster_distribution_version(cfg, client_factory=client.OsClientFactory):
         console.warn("Could not determine distribution version from endpoint, use --distribution-version to specify")
         distribution_version = None
     return distribution_version
+    """
 
 
 def to_ip_port(hosts):
