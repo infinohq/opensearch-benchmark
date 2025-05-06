@@ -2687,7 +2687,6 @@ class Retry(Runner, Delegator):
 
     async def __call__(self, opensearch, params):
         # pylint: disable=import-outside-toplevel
-        import opensearchpy
         import socket
 
         retry_until_success = params.get("retry-until-success", self.retry_until_success)
